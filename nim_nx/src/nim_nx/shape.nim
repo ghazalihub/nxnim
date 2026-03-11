@@ -9,18 +9,6 @@ proc reshape*(tensor: Tensor, newShape: seq[int]): Tensor =
 proc flatten*(tensor: Tensor): Tensor =
   reshape(tensor, @[tensor.shape.size()])
 
-proc transpose*(tensor: Tensor, axes: seq[int] = @[]): Tensor =
-  if tensor.shape.len != 2: return tensor
-  let n = tensor.shape[0]
-  let m = tensor.shape[1]
-  var t = zeros(@[m, n], tensor.dtype)
-  let itemSize = tensor.dtype.bits div 8
-  let src = BinaryBackend(tensor.data)
-  let dst = BinaryBackend(t.data)
-  for i in 0..<n:
-    for j in 0..<m:
-      copyMem(addr dst.buffer[(j * n + i) * itemSize], addr src.buffer[(i * m + j) * itemSize], itemSize)
-  t
 
 proc broadcast_shape*(s1, s2: seq[int]): seq[int] =
   let l1 = s1.len
@@ -205,3 +193,46 @@ proc tile*(tensor: Tensor, reps: seq[int]): Tensor =
       stride *= tensor.shape[j]
     copyMem(addr dst.buffer[i * itemSize], addr src.buffer[srcIdx * itemSize], itemSize)
   res
+
+proc axes*(tensor: Tensor): seq[int] =
+  result = newSeq[int](tensor.shape.len)
+  for i in 0..<tensor.shape.len: result[i] = i
+
+proc axis_size*(tensor: Tensor, axis: int): int =
+  let ax = if axis < 0: tensor.shape.len + axis else: axis
+  tensor.shape[ax]
+
+proc reverse*(tensor: Tensor, axes: seq[int] = @[]): Tensor =
+  # Only 1D reverse for now if axes is empty or [0]
+  let res = zeros(tensor.shape, tensor.dtype)
+  let totalSize = tensor.shape.size()
+  let itemSize = tensor.dtype.bits div 8
+  let src = BinaryBackend(tensor.data)
+  let dst = BinaryBackend(res.data)
+  for i in 0..<totalSize:
+    copyMem(addr dst.buffer[(totalSize - 1 - i) * itemSize], addr src.buffer[i * itemSize], itemSize)
+  res
+
+proc slice_along_axis*(tensor: Tensor, start, length: int, axis: int = 0): Tensor =
+  var starts = newSeq[int](tensor.shape.len)
+  var lengths = tensor.shape
+  starts[axis] = start
+  lengths[axis] = length
+  slice(tensor, starts, lengths)
+
+proc split*(tensor: Tensor, num_or_size: int, axis: int = 0): seq[Tensor] =
+  let axSize = tensor.axis_size(axis)
+  let chunkSize = if axSize mod num_or_size == 0: axSize div num_or_size else: num_or_size
+  let numParts = axSize div chunkSize
+  result = newSeq[Tensor](numParts)
+  for i in 0..<numParts:
+    result[i] = slice_along_axis(tensor, i * chunkSize, chunkSize, axis)
+
+proc broadcast_vectors*(tensors: seq[Tensor]): seq[Tensor] =
+  # Very simplified: broadcast all to same shape
+  var finalShape: seq[int] = @[]
+  for t in tensors:
+    finalShape = broadcast_shape(finalShape, t.shape)
+  result = newSeq[Tensor](tensors.len)
+  for i, t in tensors:
+    result[i] = broadcast_to(t, finalShape)
